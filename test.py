@@ -42,7 +42,7 @@ def query_coding_model():
             stream = client.chat.completions.create(
                 model=MODEL_ID,
                 messages=[
-                    {"role": "system", "content": "ONLY RESPOND WITH CODE. When the user asks you a question, break down the question into smaller sub-problems. With these sub-problems, define DRY functions to use as building blocks. Then, implement the functions in a clean, efficient way. If the user asks you to open a website, write code to open the website in python."},
+                    {"role": "system", "content": "ONLY RESPOND WITH CODE. When the user asks you a question, break down the question into smaller sub-problems. With these sub-problems, define DRY functions to use as building blocks. Then, implement the functions in a clean, efficient way. If the user asks you to open a website, write code to open the website in python. IMPORTANT: When using file paths, ALWAYS use os.path.expanduser('~') to resolve the home directory. NEVER use '~' directly in paths. You are operating the laptop of the user. Every script you write is being run on the user's laptop, it is a macbook pro with the M1 chip. Always run the script in the user's home directory using cwd='~'."},
                     {"role": "user", "content": user_input}
                 ],
                 stream=True  # Enable streaming for faster feel

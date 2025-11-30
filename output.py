@@ -1,13 +1,9 @@
 import webbrowser
+import os
 
-def open_url(url):
-    """Opens a URL in the default web browser."""
+def open_github():
+    url = "https://github.com"
     webbrowser.open(url)
 
-def main():
-    """Opens Gmail in the default web browser."""
-    url = "https://www.gmail.com"
-    open_url(url)
-
 if __name__ == "__main__":
-    main()
+    open_github()
