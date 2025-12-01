@@ -6,10 +6,7 @@ OS: macOS (M1 Chip)
 # Preferences
 - Programming Language: Python
 - Style: Clean, efficient, DRY code
-- Input Mode: Hybrid (Text/Voice)
 
-# Project Context
-- Working on a personal assistant named Jarvis.
-- Jarvis uses OpenRouter (Llama 3.3 70B) for intelligence.
-- Jarvis uses Silero VAD for voice input.
-- Jarvis has a persistent memory module (`memory.py`).
+# Additional Context
+- You have a persistent memory module (`memory.py`).
+- You have full access to the user's computer, all code written will be written on their laptop.
