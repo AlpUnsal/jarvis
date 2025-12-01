@@ -1,9 +1,10 @@
-import webbrowser
-import os
-
-def open_google():
-    url = "https://www.google.com"
-    webbrowser.open(url)
+def print_user_name():
+    """
+    Retrieves the user's name from the static context and prints it.
+    """
+    # Name derived from Static Memory / Context: Alp
+    user_name = "Alp"
+    print(user_name)
 
 if __name__ == "__main__":
-    open_google()
+    print_user_name()
