@@ -261,6 +261,8 @@ def main():
     
     print("Listening for voice commands... (Ctrl+C to quit)\n")
 
+    pending_experience = None
+
     while True:
         try:
             # Prompt for input
@@ -277,8 +279,37 @@ def main():
                 
             if user_input.lower() in ["quit", "exit", "stop"]:
                 print("Exiting...")
+                # If we exit, we discard pending experience as per user request (uncertainty)
+                if pending_experience:
+                    print(f"[Evo-Memory] Discarding pending experience due to exit.")
                 break
             
+            # --- Evo-Memory Feedback Analysis ---
+            if pending_experience:
+                print("\n[Evo-Memory] Analyzing feedback for pending experience...")
+                # Ask LLM to classify the relationship
+                feedback_prompt = f"""
+You are analyzing a user's conversation flow to manage memory.
+Previous User Query: "{pending_experience['query']}"
+Current User Input: "{user_input}"
+
+Is the Current User Input a CORRECTION/REFINEMENT of the Previous Query (indicating the previous code wasn't quite right), or is it a NEW TOPIC/CONFIRMATION (indicating the previous code was good)?
+
+Output ONLY 'CORRECTION' or 'NEW_TOPIC'.
+"""
+                # Use a quick non-streaming call
+                # We can reuse the client but need to handle the generator
+                feedback_stream = client.send_message(feedback_prompt, "You are a logic analyzer.")
+                feedback_response = "".join([chunk for chunk in feedback_stream]).strip()
+                
+                if "NEW_TOPIC" in feedback_response:
+                    print(f"[Evo-Memory] Feedback positive (New Topic/Confirmation). Saving previous experience.")
+                    memory.add_experience(pending_experience['query'], pending_experience['code'])
+                else:
+                    print(f"[Evo-Memory] Feedback negative (Correction/Refinement). Discarding previous experience.")
+                
+                pending_experience = None
+
             print("\nThinking...\n")
 
             # Load static memory from jarvis.md
@@ -306,6 +337,19 @@ def main():
             
             # Construct the full prompt
             full_prompt = f"{system_prompt}\n\nUser: {user_input}"
+
+            # --- Evo-Memory Retrieval ---
+            import memory
+            relevant_experiences = memory.retrieve_experiences(user_input)
+            if relevant_experiences:
+                print(f"\n[Evo-Memory] Found {len(relevant_experiences)} relevant past experiences.")
+                experience_context = "\n\n### RELEVANT PAST EXPERIENCES (Use these as a guide):\n"
+                for i, exp in enumerate(relevant_experiences):
+                    experience_context += f"Experience {i+1}:\nUser Query: {exp['query']}\nSuccessful Code:\n```python\n{exp['code']}\n```\n\n"
+                
+                # Inject into system prompt part of the full prompt
+                # We'll just append it before the User input for context
+                full_prompt = f"{system_prompt}\n{experience_context}\nUser: {user_input}"
             
             # Retry loop for self-healing
             MAX_RETRIES = 3
@@ -374,37 +418,12 @@ def main():
                         else:
                             # Success!
                             
-                            # --- Adaptive Learning ---
-                            # If we had to retry (attempt > 0), it means we learned something.
-                            # Ask the model if it wants to save this solution.
-                            if attempt > 0:
-                                print("\n--- Learning from Success ---")
-                                learning_prompt = f"{current_prompt_for_llm}\n\nSystem: The code executed successfully! Since we had to fix errors, this is a valuable learning moment. If this solution is worth remembering for future '{user_input}' requests, please output a code block calling `from memory import remember; remember('key', 'value')`. The key should be the user's intent, and the value should be the successful code or a summary. If not worth saving, just say 'No memory needed'."
-                                
-                                # We need a quick non-streaming call or just reuse the streaming logic
-                                # For simplicity, reuse streaming but just capture output
-                                learn_stream = client.send_message(learning_prompt, system_prompt)
-                                learn_response = ""
-                                for chunk in learn_stream:
-                                    sys.stdout.write(chunk) # Show the user the thinking
-                                    learn_response += chunk
-                                
-                                # Extract code from learning response
-                                learn_blocks = re.findall(r"```(?:python)?\s*(.*?)```", learn_response, re.DOTALL)
-                                learn_code = "\n\n".join(learn_blocks).strip()
-                                
-                                if learn_code:
-                                    # Execute memory saving code
-                                    # We trust this code as it's just memory ops, but still run safe check?
-                                    # Memory ops are safe.
-                                    try:
-                                        # Write to a temp memory script
-                                        with open("memory_update.py", "w") as f:
-                                            f.write(learn_code)
-                                        subprocess.run([sys.executable, "memory_update.py"], check=True)
-                                        print("\n[Memory Updated]")
-                                    except Exception as e:
-                                        print(f"\n[Memory Update Failed]: {e}")
+                            # --- Evo-Memory Update (Deferred) ---
+                            print("\n[Evo-Memory] Execution successful. Holding experience for validation...")
+                            pending_experience = {
+                                'query': user_input,
+                                'code': clean_code
+                            }
 
                             break
                             
