@@ -23,9 +23,8 @@ def main():
         elif user_input == 'h':
             print_help()
         else:
-            response = llm.send_message(user_input, "You are an advanced coding assistant named Jarvis. Respond to the user with only executable python code. The user is on Mac OS.")
-            #print(response)
-            '''
+            response = llm.send_message(user_input, "ONLY RESPOND WITH EXECUTABLE PYTHON CODE. Your output will be executed DIRECTLY on the user's machine, so make sure to include all necessary imports and code to run the task. The user is on Mac OS.")
+            
             result = executor.execute_code(response)
             if 'error' in result:
                 print(f"Error: {result['error']}")
@@ -34,7 +33,6 @@ def main():
             else:
                 print(result.get('output', ''))
                 print(result.get('variables', {}))
-            '''
 
 if __name__ == "__main__":
     main()
