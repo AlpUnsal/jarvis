@@ -261,6 +261,8 @@ def main():
     
     print("Listening for voice commands... (Ctrl+C to quit)\n")
 
+    pending_experience = None
+
     while True:
         try:
             # Prompt for input
@@ -277,8 +279,110 @@ def main():
                 
             if user_input.lower() in ["quit", "exit", "stop"]:
                 print("Exiting...")
+                # If we exit, we discard pending experience as per user request (uncertainty)
+                if pending_experience:
+                    print(f"[Evo-Memory] Discarding pending experience due to exit.")
                 break
             
+            # --- Evo-Memory Feedback Analysis (Refine Step) ---
+            if pending_experience:
+                print("\n[Evo-Memory] Analyzing feedback for pending experience...")
+                # Ask LLM to classify the relationship
+                feedback_prompt = f"""
+You are analyzing a user's conversation flow to manage memory.
+Previous User Query: "{pending_experience['query']}"
+Current User Input: "{user_input}"
+
+Is the Current User Input a CORRECTION/REFINEMENT of the Previous Query (indicating the previous code wasn't quite right), or is it a NEW TOPIC/CONFIRMATION (indicating the previous code was good)?
+
+Output ONLY 'CORRECTION' or 'NEW_TOPIC'.
+"""
+                # Use a quick non-streaming call
+                feedback_stream = client.send_message(feedback_prompt, "You are a logic analyzer.")
+                feedback_response = "".join([chunk for chunk in feedback_stream]).strip()
+                
+                if "NEW_TOPIC" in feedback_response:
+                    print(f"[Evo-Memory] Feedback positive (New Topic/Confirmation). Initiating Memory Evolution...")
+                    
+                    # --- Refine: Evolve Memory Bank ---
+                    # We have the new experience (pending_experience) and the memories that were retrieved for it (pending_experience['retrieved'])
+                    
+                    new_exp_query = pending_experience['query']
+                    new_exp_code = pending_experience['code']
+                    retrieved_exps = pending_experience.get('retrieved', [])
+                    
+                    if not retrieved_exps:
+                        # No prior memories used, so this is definitely new.
+                        print("[Evo-Memory] No prior memories used. Adding as new experience.")
+                        memory.add_experience(new_exp_query, new_exp_code)
+                    else:
+                        # Complex Evolution Logic
+                        evolution_prompt = f"""
+You are the Memory Manager for an AI agent.
+We have a NEW SUCCESSFUL EXPERIENCE and a list of RETRIEVED MEMORIES that were used to generate it.
+Your job is to decide how to update the memory bank.
+
+NEW EXPERIENCE:
+Query: "{new_exp_query}"
+Code: 
+{new_exp_code}
+
+RETRIEVED MEMORIES (Used as context):
+"""
+                        for i, exp in enumerate(retrieved_exps):
+                            evolution_prompt += f"Memory {i+1} (ID: {exp.get('id')}): Query: '{exp['query']}'\n"
+
+                        evolution_prompt += """
+DECISION RULES:
+1. ADD: If the New Experience is significantly different from Retrieved Memories (new task, new library), ADD it.
+2. UPDATE: If the New Experience is a BETTER/FIXED version of a specific Retrieved Memory (e.g., same task but fixed bug), UPDATE that memory.
+3. PRUNE: If a Retrieved Memory is now OBSOLETE or REDUNDANT because the New Experience covers it better, PRUNE (Delete) it.
+4. IGNORE: If the New Experience is trivial or identical to existing memory, do nothing.
+
+Output a JSON list of actions. Format:
+[
+    {"action": "ADD", "reason": "..."},
+    {"action": "UPDATE", "target_id": "...", "reason": "..."},
+    {"action": "PRUNE", "target_id": "...", "reason": "..."}
+]
+ONLY output the JSON.
+"""
+                        try:
+                            evo_stream = client.send_message(evolution_prompt, "You are a Memory Manager. Output JSON only.")
+                            evo_response = "".join([chunk for chunk in evo_stream]).strip()
+                            # Clean up markdown code blocks if present
+                            if "```json" in evo_response:
+                                evo_response = evo_response.split("```json")[1].split("```")[0].strip()
+                            elif "```" in evo_response:
+                                evo_response = evo_response.split("```")[1].split("```")[0].strip()
+                                
+                            import json
+                            actions = json.loads(evo_response)
+                            
+                            for action in actions:
+                                act_type = action.get("action")
+                                reason = action.get("reason")
+                                target_id = action.get("target_id")
+                                
+                                if act_type == "ADD":
+                                    print(f"[Evo-Memory] ADDING new experience: {reason}")
+                                    memory.add_experience(new_exp_query, new_exp_code)
+                                elif act_type == "UPDATE" and target_id:
+                                    print(f"[Evo-Memory] UPDATING memory {target_id}: {reason}")
+                                    memory.update_experience(target_id, new_query=new_exp_query, new_code=new_exp_code)
+                                elif act_type == "PRUNE" and target_id:
+                                    print(f"[Evo-Memory] PRUNING memory {target_id}: {reason}")
+                                    memory.delete_experience(target_id)
+                                    
+                        except Exception as e:
+                            print(f"[Evo-Memory] Evolution failed: {e}. Defaulting to ADD.")
+                            memory.add_experience(new_exp_query, new_exp_code)
+
+                else:
+                    print(f"[Evo-Memory] Feedback negative (Correction/Refinement). Discarding previous experience.")
+                
+                pending_experience = None
+
             print("\nThinking...\n")
 
             # Load static memory from jarvis.md
@@ -299,13 +403,26 @@ def main():
             elif current_os == "Linux":
                 os_specific_rules = "8. **Linux Automation**: You CAN control Linux applications using `subprocess.run` with bash commands, `xdotool`, or `dbus-send` depending on the environment."
 
-            system_prompt = f"You are an advanced coding assistant named Jarvis. You can converse naturally with the user AND write executable Python code to control the computer.\n\nRULES:\n1. If the user asks a question, answer it helpfully.\n2. If the user asks you to DO something (e.g., 'open app', 'search web', 'calculate'), you MUST write Python code to do it.\n3. Put all executable code inside markdown code blocks, like this:\n```python\n# code here\n```\n4. You can add explanations before or after the code.\n5. The code will be executed IMMEDIATELY on the user's machine ({current_os}).\n6. Use `os.path.expanduser('~')` for home directory paths.\n7. Use `cwd='~'` for subprocess calls.\n{os_specific_rules}\n\nMEMORY TOOLS:\nTo use memory, import it: `from memory import remember, recall, forget, list_memories`."
+            system_prompt = f"You are an advanced coding assistant named Jarvis. You can converse naturally with the user AND write executable Python code to control the computer.\n\nRULES:\n1. If the user asks a question, answer it helpfully.\n2. If the user asks you to DO something (e.g., 'open app', 'search web', 'calculate'), you MUST write Python code to do it.\n3. Put all executable code inside markdown code blocks, like this:\n```python\n# code here\n```\n4. You can add explanations before or after the code.\n5. The code will be executed IMMEDIATELY on the user's machine ({current_os}).\n6. Use `os.path.expanduser('~')` for home directory paths.\n7. Use `cwd='~'` for subprocess calls.\n{os_specific_rules}\n\nMEMORY TOOLS:\nTo use memory, import it: `from memory import remember, recall, forget, list_memories`.\n\nTHINKING PROCESS:\nBefore generating any code, you must output a REASONING TRACE.\n1. Analyze the user's request.\n2. Review any Retrieved Experiences (if provided).\n3. Explain WHY you are using or adapting a past experience, or why you are ignoring it.\n4. Formulate a plan.\n5. THEN generate the code."
             
             if static_memory:
                 system_prompt += f"\n\nSTATIC MEMORY / CONTEXT (from jarvis.md):\n{static_memory}"
             
             # Construct the full prompt
             full_prompt = f"{system_prompt}\n\nUser: {user_input}"
+
+            # --- Evo-Memory Retrieval ---
+            import memory
+            relevant_experiences = memory.retrieve_experiences(user_input)
+            if relevant_experiences:
+                print(f"\n[Evo-Memory] Found {len(relevant_experiences)} relevant past experiences.")
+                experience_context = "\n\n### RELEVANT PAST EXPERIENCES (Use these as a guide):\n"
+                for i, exp in enumerate(relevant_experiences):
+                    experience_context += f"Experience {i+1} (ID: {exp.get('id')}):\nUser Query: {exp['query']}\nSuccessful Code:\n```python\n{exp['code']}\n```\n\n"
+                
+                # Inject into system prompt part of the full prompt
+                # We'll just append it before the User input for context
+                full_prompt = f"{system_prompt}\n{experience_context}\nUser: {user_input}"
             
             # Retry loop for self-healing
             MAX_RETRIES = 3
@@ -374,37 +491,13 @@ def main():
                         else:
                             # Success!
                             
-                            # --- Adaptive Learning ---
-                            # If we had to retry (attempt > 0), it means we learned something.
-                            # Ask the model if it wants to save this solution.
-                            if attempt > 0:
-                                print("\n--- Learning from Success ---")
-                                learning_prompt = f"{current_prompt_for_llm}\n\nSystem: The code executed successfully! Since we had to fix errors, this is a valuable learning moment. If this solution is worth remembering for future '{user_input}' requests, please output a code block calling `from memory import remember; remember('key', 'value')`. The key should be the user's intent, and the value should be the successful code or a summary. If not worth saving, just say 'No memory needed'."
-                                
-                                # We need a quick non-streaming call or just reuse the streaming logic
-                                # For simplicity, reuse streaming but just capture output
-                                learn_stream = client.send_message(learning_prompt, system_prompt)
-                                learn_response = ""
-                                for chunk in learn_stream:
-                                    sys.stdout.write(chunk) # Show the user the thinking
-                                    learn_response += chunk
-                                
-                                # Extract code from learning response
-                                learn_blocks = re.findall(r"```(?:python)?\s*(.*?)```", learn_response, re.DOTALL)
-                                learn_code = "\n\n".join(learn_blocks).strip()
-                                
-                                if learn_code:
-                                    # Execute memory saving code
-                                    # We trust this code as it's just memory ops, but still run safe check?
-                                    # Memory ops are safe.
-                                    try:
-                                        # Write to a temp memory script
-                                        with open("memory_update.py", "w") as f:
-                                            f.write(learn_code)
-                                        subprocess.run([sys.executable, "memory_update.py"], check=True)
-                                        print("\n[Memory Updated]")
-                                    except Exception as e:
-                                        print(f"\n[Memory Update Failed]: {e}")
+                            # --- Evo-Memory Update (Deferred) ---
+                            print("\n[Evo-Memory] Execution successful. Holding experience for validation...")
+                            pending_experience = {
+                                'query': user_input,
+                                'code': clean_code,
+                                'retrieved': relevant_experiences # Capture retrieved experiences for Refine step
+                            }
 
                             break
                             
